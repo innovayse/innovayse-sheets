@@ -1,0 +1,17 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "ConnectionStrings": {
+    "SheetsDb": "Host=localhost;Port=5435;Database=innovayse_sheets;Username=postgres;Password=postgres"
+  },
+  "Cors": {
+    "AllowedOrigins": ["http://sheets.local", "http://localhost:3000", "http://localhost:3033"]
+  },
+  "ServiceAuth": {
+    "ApiKey": "dev-service-key-sheets"
+  }
+}
