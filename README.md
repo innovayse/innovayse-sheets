@@ -1,5 +1,8 @@
 # Innovayse Sheets
 
+[![CI](https://github.com/innovayse/innovayse-sheets/actions/workflows/ci.yml/badge.svg)](https://github.com/innovayse/innovayse-sheets/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A Google-Sheets-style collaborative spreadsheet service: an ASP.NET Core 9 backend (formula evaluation, sharing/access control, SignalR-based real-time presence and live cell updates) with a Nuxt/Vue 3 client.
 
 ## Architecture
