@@ -38,6 +38,15 @@ export interface CellWrite {
   formatJson?: string | null
 }
 
+export class ApiError extends Error {
+  status: number
+
+  constructor(path: string, status: number) {
+    super(`Request to ${path} failed with ${status}`)
+    this.status = status
+  }
+}
+
 export function useSheetApi(baseUrl: string) {
   async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const { getToken } = useAuthToken()
@@ -50,7 +59,7 @@ export function useSheetApi(baseUrl: string) {
         ...(options.headers ?? {})
       }
     })
-    if (!response.ok) throw new Error(`Request to ${path} failed with ${response.status}`)
+    if (!response.ok) throw new ApiError(path, response.status)
     return response.json() as Promise<T>
   }
 
@@ -58,6 +67,12 @@ export function useSheetApi(baseUrl: string) {
     listSpreadsheets: () => request<Spreadsheet[]>('/api/spreadsheets'),
     createSpreadsheet: (title: string) =>
       request<Spreadsheet>('/api/spreadsheets', { method: 'POST', body: JSON.stringify({ title }) }),
+    renameSpreadsheet: (id: string, title: string) =>
+      request<Spreadsheet>(`/api/spreadsheets/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
+    duplicateSpreadsheet: (id: string) =>
+      request<Spreadsheet>(`/api/spreadsheets/${id}/duplicate`, { method: 'POST' }),
+    deleteSpreadsheet: (id: string) =>
+      request<void>(`/api/spreadsheets/${id}`, { method: 'DELETE' }),
     listSheets: (spreadsheetId: string) =>
       request<Sheet[]>(`/api/spreadsheets/${spreadsheetId}/sheets`),
     createSheet: (spreadsheetId: string, name: string) =>

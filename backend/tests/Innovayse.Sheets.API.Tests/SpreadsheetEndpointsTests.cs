@@ -199,7 +199,127 @@ public class SpreadsheetEndpointsTests : IClassFixture<SheetsApiFactory>
         Assert.Equal(spreadsheet.Id, lookup!.SpreadsheetId);
     }
 
+    [Fact]
+    public async Task Rename_AsOwner_UpdatesTitle()
+    {
+        var client = _factory.CreateClient();
+        var created = await (await client.PostAsJsonAsync("/api/spreadsheets", new { title = "Old Name" }))
+            .Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+
+        var renameResponse = await client.PatchAsJsonAsync($"/api/spreadsheets/{created!.Id}", new { title = "New Name" });
+        Assert.Equal(HttpStatusCode.OK, renameResponse.StatusCode);
+        var renamed = await renameResponse.Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+        Assert.Equal("New Name", renamed!.Title);
+
+        var getResponse = await client.GetAsync($"/api/spreadsheets/{created.Id}");
+        var fetched = await getResponse.Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+        Assert.Equal("New Name", fetched!.Title);
+    }
+
+    [Fact]
+    public async Task Rename_AsNonOwner_ReturnsNotFoundAndDoesNotChangeTitle()
+    {
+        var owner = _factory.CreateClient();
+        var created = await (await owner.PostAsJsonAsync("/api/spreadsheets", new { title = "Protected" }))
+            .Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+
+        var stranger = _factory.CreateClient();
+        stranger.DefaultRequestHeaders.Add(TestAuthHandler.OwnerOverrideHeader, TestAuthHandler.SecondTestOwnerId.ToString());
+
+        var renameResponse = await stranger.PatchAsJsonAsync($"/api/spreadsheets/{created!.Id}", new { title = "Hijacked" });
+        Assert.Equal(HttpStatusCode.NotFound, renameResponse.StatusCode);
+
+        var getResponse = await owner.GetAsync($"/api/spreadsheets/{created.Id}");
+        var fetched = await getResponse.Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+        Assert.Equal("Protected", fetched!.Title);
+    }
+
+    [Fact]
+    public async Task Rename_WithEmptyTitle_ReturnsBadRequestAndDoesNotChangeTitle()
+    {
+        var client = _factory.CreateClient();
+        var created = await (await client.PostAsJsonAsync("/api/spreadsheets", new { title = "Keep Me" }))
+            .Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+
+        var renameResponse = await client.PatchAsJsonAsync($"/api/spreadsheets/{created!.Id}", new { title = "   " });
+        Assert.Equal(HttpStatusCode.BadRequest, renameResponse.StatusCode);
+
+        var getResponse = await client.GetAsync($"/api/spreadsheets/{created.Id}");
+        var fetched = await getResponse.Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+        Assert.Equal("Keep Me", fetched!.Title);
+    }
+
+    [Fact]
+    public async Task Duplicate_AsOwner_CreatesIndependentCopyWithSheetsAndCells()
+    {
+        var client = _factory.CreateClient();
+        var original = await (await client.PostAsJsonAsync("/api/spreadsheets", new { title = "Original" }))
+            .Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+        var sheet = await (await client.PostAsJsonAsync($"/api/spreadsheets/{original!.Id}/sheets", new { name = "Sheet1" }))
+            .Content.ReadFromJsonAsync<SheetDtoShape>();
+        await client.PatchAsJsonAsync($"/api/sheets/{sheet!.Id}/cells", new { cells = new[] { new { row = 0, col = 0, rawValue = "42" } } });
+
+        var duplicateResponse = await client.PostAsync($"/api/spreadsheets/{original.Id}/duplicate", null);
+        Assert.Equal(HttpStatusCode.Created, duplicateResponse.StatusCode);
+        var copy = await duplicateResponse.Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+
+        Assert.NotEqual(original.Id, copy!.Id);
+        Assert.Equal("Original (copy)", copy.Title);
+        Assert.Equal("Owner", copy.AccessLevel);
+
+        var copiedSheets = await (await client.GetAsync($"/api/spreadsheets/{copy.Id}/sheets"))
+            .Content.ReadFromJsonAsync<System.Collections.Generic.List<SheetDtoShape>>();
+        Assert.Single(copiedSheets!);
+        Assert.Equal("Sheet1", copiedSheets![0].Name);
+        Assert.NotEqual(sheet.Id, copiedSheets[0].Id);
+
+        var copiedCells = await (await client.GetAsync($"/api/sheets/{copiedSheets[0].Id}/cells"))
+            .Content.ReadFromJsonAsync<System.Collections.Generic.List<CellDtoShape>>();
+        Assert.Single(copiedCells!);
+        Assert.Equal("42", copiedCells![0].RawValue);
+
+        var originalCellsAfter = await (await client.GetAsync($"/api/sheets/{sheet.Id}/cells"))
+            .Content.ReadFromJsonAsync<System.Collections.Generic.List<CellDtoShape>>();
+        Assert.Single(originalCellsAfter!);
+        Assert.Equal("42", originalCellsAfter![0].RawValue);
+    }
+
+    [Fact]
+    public async Task Duplicate_AsEditShare_Succeeds()
+    {
+        var owner = _factory.CreateClient();
+        _factory.Services.GetRequiredService<FakeSsoUserDirectory>().Register("dupeeditor@example.com", TestAuthHandler.SecondTestOwnerId);
+        var original = await (await owner.PostAsJsonAsync("/api/spreadsheets", new { title = "Shared Original" }))
+            .Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+        await owner.PostAsJsonAsync($"/api/spreadsheets/{original!.Id}/shares", new { userIdentifier = "dupeeditor@example.com", role = "Edit" });
+
+        var editor = _factory.CreateClient();
+        editor.DefaultRequestHeaders.Add(TestAuthHandler.OwnerOverrideHeader, TestAuthHandler.SecondTestOwnerId.ToString());
+
+        var duplicateResponse = await editor.PostAsync($"/api/spreadsheets/{original.Id}/duplicate", null);
+        Assert.Equal(HttpStatusCode.Created, duplicateResponse.StatusCode);
+        var copy = await duplicateResponse.Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+        Assert.Equal("Owner", copy!.AccessLevel);
+    }
+
+    [Fact]
+    public async Task Duplicate_AsViewOnlyShare_ReturnsNotFound()
+    {
+        var owner = _factory.CreateClient();
+        _factory.Services.GetRequiredService<FakeSsoUserDirectory>().Register("dupeviewer@example.com", TestAuthHandler.SecondTestOwnerId);
+        var original = await (await owner.PostAsJsonAsync("/api/spreadsheets", new { title = "View Only Source" }))
+            .Content.ReadFromJsonAsync<SpreadsheetDtoShape>();
+        await owner.PostAsJsonAsync($"/api/spreadsheets/{original!.Id}/shares", new { userIdentifier = "dupeviewer@example.com", role = "View" });
+
+        var viewer = _factory.CreateClient();
+        viewer.DefaultRequestHeaders.Add(TestAuthHandler.OwnerOverrideHeader, TestAuthHandler.SecondTestOwnerId.ToString());
+
+        var duplicateResponse = await viewer.PostAsync($"/api/spreadsheets/{original.Id}/duplicate", null);
+        Assert.Equal(HttpStatusCode.NotFound, duplicateResponse.StatusCode);
+    }
+
     private record SpreadsheetDtoShape(System.Guid Id, string Title, System.DateTimeOffset CreatedAt, System.DateTimeOffset UpdatedAt, string AccessLevel);
     private record SheetDtoShape(System.Guid Id, string Name, int Order);
     private record SheetSummaryDtoShape(System.Guid Id, System.Guid SpreadsheetId, string Name, int Order);
+    private record CellDtoShape(int Row, int Col, string RawValue, double? ComputedValue, string? TextValue, string? Error, string? FormatJson);
 }

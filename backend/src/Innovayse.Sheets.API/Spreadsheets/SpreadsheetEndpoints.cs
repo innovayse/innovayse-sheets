@@ -82,5 +82,78 @@ public static class SpreadsheetEndpoints
             await db.SaveChangesAsync();
             return Results.NoContent();
         });
+
+        group.MapPatch("/{id:guid}", async (Guid id, RenameSpreadsheetRequest request, SheetsDbContext db, ISpreadsheetAccessService access, HttpContext ctx) =>
+        {
+            var userId = CurrentUser.GetOwnerId(ctx);
+            if (userId == Guid.Empty) return Results.Unauthorized();
+
+            var level = await access.GetAccessLevel(id, userId);
+            if (level is null || level != AccessLevel.Owner) return Results.NotFound();
+
+            if (string.IsNullOrWhiteSpace(request.Title)) return Results.BadRequest();
+
+            var entity = await db.Spreadsheets.FirstOrDefaultAsync(s => s.Id == id);
+            entity!.Title = request.Title;
+            entity.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+
+            return Results.Ok(new SpreadsheetDto(entity.Id, entity.Title, entity.CreatedAt, entity.UpdatedAt, level.Value.ToString()));
+        });
+
+        group.MapPost("/{id:guid}/duplicate", async (Guid id, SheetsDbContext db, ISpreadsheetAccessService access, HttpContext ctx) =>
+        {
+            var userId = CurrentUser.GetOwnerId(ctx);
+            if (userId == Guid.Empty) return Results.Unauthorized();
+
+            var level = await access.GetAccessLevel(id, userId);
+            if (level is null || level == AccessLevel.View) return Results.NotFound();
+
+            var source = await db.Spreadsheets.FirstOrDefaultAsync(s => s.Id == id);
+            if (source is null) return Results.NotFound();
+
+            var now = DateTimeOffset.UtcNow;
+            var copy = new Spreadsheet
+            {
+                Id = Guid.NewGuid(),
+                Title = $"{source.Title} (copy)",
+                OwnerId = userId,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            db.Spreadsheets.Add(copy);
+
+            var sourceSheets = await db.Sheets.Where(sh => sh.SpreadsheetId == id).ToListAsync();
+            foreach (var sourceSheet in sourceSheets)
+            {
+                var newSheet = new Sheet
+                {
+                    Id = Guid.NewGuid(),
+                    SpreadsheetId = copy.Id,
+                    Name = sourceSheet.Name,
+                    Order = sourceSheet.Order
+                };
+                db.Sheets.Add(newSheet);
+
+                var sourceCells = await db.Cells.Where(c => c.SheetId == sourceSheet.Id).ToListAsync();
+                foreach (var sourceCell in sourceCells)
+                {
+                    db.Cells.Add(new Cell
+                    {
+                        Id = Guid.NewGuid(),
+                        SheetId = newSheet.Id,
+                        Row = sourceCell.Row,
+                        Col = sourceCell.Col,
+                        RawValue = sourceCell.RawValue,
+                        FormatJson = sourceCell.FormatJson
+                    });
+                }
+            }
+
+            await db.SaveChangesAsync();
+
+            var dto = new SpreadsheetDto(copy.Id, copy.Title, copy.CreatedAt, copy.UpdatedAt, "Owner");
+            return Results.Created($"/api/spreadsheets/{copy.Id}", dto);
+        });
     }
 }
