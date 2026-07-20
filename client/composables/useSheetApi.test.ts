@@ -47,6 +47,44 @@ describe('useSheetApi', () => {
     expect(result).toEqual(mockResponse)
   })
 
+  it('renameSpreadsheet sends a PATCH with the new title', async () => {
+    const mockResponse = { id: '1', title: 'Renamed', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-19T00:00:00Z', accessLevel: 'Owner' }
+    ;(fetch as any).mockResolvedValue({ ok: true, json: async () => mockResponse })
+
+    const api = useSheetApi('http://sheets.local')
+    const result = await api.renameSpreadsheet('1', 'Renamed')
+
+    expect(fetch).toHaveBeenCalledWith('http://sheets.local/api/spreadsheets/1', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ title: 'Renamed' })
+    }))
+    expect(result).toEqual(mockResponse)
+  })
+
+  it('duplicateSpreadsheet posts to the duplicate endpoint and returns the new spreadsheet', async () => {
+    const mockResponse = { id: '2', title: 'Original (copy)', createdAt: '2026-07-19T00:00:00Z', updatedAt: '2026-07-19T00:00:00Z', accessLevel: 'Owner' }
+    ;(fetch as any).mockResolvedValue({ ok: true, json: async () => mockResponse })
+
+    const api = useSheetApi('http://sheets.local')
+    const result = await api.duplicateSpreadsheet('1')
+
+    expect(fetch).toHaveBeenCalledWith('http://sheets.local/api/spreadsheets/1/duplicate', expect.objectContaining({
+      method: 'POST'
+    }))
+    expect(result).toEqual(mockResponse)
+  })
+
+  it('deleteSpreadsheet sends a DELETE to the spreadsheet endpoint', async () => {
+    ;(fetch as any).mockResolvedValue({ ok: true, json: async () => ({}) })
+
+    const api = useSheetApi('http://sheets.local')
+    await api.deleteSpreadsheet('1')
+
+    expect(fetch).toHaveBeenCalledWith('http://sheets.local/api/spreadsheets/1', expect.objectContaining({
+      method: 'DELETE'
+    }))
+  })
+
   it('writeCells sends a PATCH with the cell batch', async () => {
     ;(fetch as any).mockResolvedValue({ ok: true, json: async () => ({}) })
 
@@ -78,5 +116,14 @@ describe('useSheetApi', () => {
     const result = await api.getCells('sheet-1')
 
     expect(result).toEqual(mockCells)
+  })
+
+  it('writeCells rejects with the HTTP status attached when the request fails', async () => {
+    ;(fetch as any).mockResolvedValue({ ok: false, status: 401, json: async () => ({}) })
+
+    const api = useSheetApi('http://sheets.local')
+
+    await expect(api.writeCells('sheet-1', [{ row: 0, col: 0, rawValue: '5' }]))
+      .rejects.toMatchObject({ status: 401 })
   })
 })
